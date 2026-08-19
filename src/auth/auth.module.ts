@@ -9,6 +9,8 @@ import { LocationModule } from '../location/location.module';
 import { RateLimitModule } from '../rate-limit/rate-limit.module';
 import { LoginVerificationModule } from '../login-verification/login-verification.module';
 import { GoogleAuthModule } from '../google-auth/google-auth.module';
+import { AuthGuardModule } from '../auth-guard/auth-guard.module';
+import { AuthTokenModule } from '../auth-token/auth-token.module';
 
 @Module({
   controllers: [AuthController],
@@ -22,6 +24,8 @@ import { GoogleAuthModule } from '../google-auth/google-auth.module';
     RateLimitModule,
     LoginVerificationModule,
     GoogleAuthModule,
+    AuthGuardModule,
+    AuthTokenModule,
   ],
 })
 export class AuthModule {}

@@ -7,6 +7,8 @@ describe('GoogleAuthService', () => {
   const redisClient = {
     set: jest.fn(),
     getDel: jest.fn(),
+    get: jest.fn(),
+    del: jest.fn(),
     eval: jest.fn(),
   };
   const redis = { client: redisClient } as unknown as RedisService;
@@ -53,6 +55,21 @@ describe('GoogleAuthService', () => {
       expect.any(String),
       { EX: GoogleAuthService.STATE_TTL_SECONDS, NX: true },
     );
+  });
+
+  it('binds a Google link intention to the authenticated user session', async () => {
+    const authorization = await service.createLinkAuthorizationRequest(
+      '8.8.8.8',
+      'user-id',
+      'session-id',
+    );
+
+    expect(authorization.url).toContain('accounts.google.com');
+    expect(redisClient.set.mock.calls).toContainEqual([
+      expect.stringContaining('oauth:google:link-intent:'),
+      JSON.stringify({ userId: 'user-id', userSessionId: 'session-id' }),
+      { EX: GoogleAuthService.STATE_TTL_SECONDS, NX: true },
+    ]);
   });
 
   it('rejects a callback not bound to the browser before consuming Redis state', async () => {

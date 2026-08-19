@@ -3,6 +3,8 @@ import { PrismaService } from '../database/prisma.service';
 import { EmailChangeVerificationService } from '../email-change-verification/email-change-verification.service';
 import { EmailService } from '../email/email.service';
 import { UsersService } from './users.service';
+import { SensitiveActionRateLimitService } from '../rate-limit/sensitive-action-rate-limit.service';
+import { SensitiveActionVerificationService } from '../sensitive-action/sensitive-action-verification.service';
 
 describe('UsersService', () => {
   const context = {
@@ -20,6 +22,7 @@ describe('UsersService', () => {
     userPreference: { upsert: jest.fn() },
     authSession: { updateMany: jest.fn() },
     userSession: { updateMany: jest.fn() },
+    oAuthGrant: { updateMany: jest.fn() },
   };
   const prismaMock = {
     user: {
@@ -34,11 +37,15 @@ describe('UsersService', () => {
     record: jest.fn(),
     recordBestEffort: jest.fn(),
   };
+  const sensitiveRateLimits = { consume: jest.fn(), reset: jest.fn() };
+  const sensitiveVerification = { consumeAuthorization: jest.fn() };
   const service = new UsersService(
     prismaMock as unknown as PrismaService,
     auditMock as unknown as AuditService,
     {} as EmailChangeVerificationService,
     {} as EmailService,
+    sensitiveRateLimits as unknown as SensitiveActionRateLimitService,
+    sensitiveVerification as unknown as SensitiveActionVerificationService,
   );
 
   beforeEach(() => {
@@ -52,7 +59,7 @@ describe('UsersService', () => {
 
     const calls = prismaMock.user.findUniqueOrThrow.mock
       .calls as unknown as Array<[{ select: Record<string, unknown> }]>;
-    expect(calls[0][0].select.passwordHash).toBeUndefined();
+    expect(calls[0][0].select.passwordHash).toBe(true);
     expect(calls[0][0].select.email).toBe(true);
     expect(calls[0][0].select.preferences).toBeDefined();
   });
@@ -96,5 +103,46 @@ describe('UsersService', () => {
       userId: 'user-id',
       userSessionId: { not: 'current-session-id' },
     });
+  });
+
+  it('allows a provider-only user to enable 2FA after email reauthentication', async () => {
+    prismaMock.user.findUniqueOrThrow.mockResolvedValue({
+      passwordHash: null,
+      preferences: { twoFactorEnabled: false },
+    });
+    transaction.userPreference.upsert.mockResolvedValue({
+      desktopNotifications: true,
+      twoFactorEnabled: true,
+    });
+
+    await service.updatePreferences(
+      'user-id',
+      'session-id',
+      { twoFactorEnabled: true, reauthToken: 'one-use-token' },
+      context,
+    );
+
+    expect(sensitiveVerification.consumeAuthorization.mock.calls).toEqual([
+      ['one-use-token', 'user-id', 'session-id', 'change-two-factor'],
+    ]);
+    expect(sensitiveRateLimits.consume.mock.calls).toHaveLength(0);
+  });
+
+  it('revokes only an OAuth grant owned by the caller', async () => {
+    transaction.oAuthGrant.updateMany.mockResolvedValue({ count: 1 });
+
+    await expect(
+      service.revokeOAuthGrant('user-id', 'grant-id-value', context),
+    ).resolves.toEqual({ message: 'Application access revoked successfully' });
+    const calls = transaction.oAuthGrant.updateMany.mock
+      .calls as unknown as Array<
+      [{ where: Record<string, unknown>; data: { revokedAt: Date } }]
+    >;
+    expect(calls[0][0].where).toEqual({
+      grantId: 'grant-id-value',
+      userId: 'user-id',
+      revokedAt: null,
+    });
+    expect(calls[0][0].data.revokedAt).toBeInstanceOf(Date);
   });
 });

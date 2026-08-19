@@ -38,16 +38,19 @@ describe('SessionService', () => {
       refreshTokenExpiresAt: new Date('2026-08-18T17:00:00.000Z'),
     };
     const transaction = {
+      authSession: {
+        updateMany: jest.fn(),
+        create: jest
+          .fn()
+          .mockResolvedValue({ authSessionId: 'auth-session-id' }),
+      },
       userSession: {
+        findMany: jest.fn().mockResolvedValue([]),
         create: jest
           .fn()
           .mockResolvedValue({ userSessionId: 'user-session-id' }),
         update: jest.fn().mockResolvedValue({}),
-      },
-      authSession: {
-        create: jest
-          .fn()
-          .mockResolvedValue({ authSessionId: 'auth-session-id' }),
+        updateMany: jest.fn(),
       },
     };
     const prisma = {

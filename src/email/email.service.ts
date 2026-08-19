@@ -26,6 +26,12 @@ interface SendPasswordResetInput {
   idempotencyKey: string;
 }
 
+interface SendSensitiveActionInput {
+  to: string;
+  code: string;
+  idempotencyKey: string;
+}
+
 @Injectable()
 export class EmailService {
   private readonly resend: Resend;
@@ -156,6 +162,30 @@ export class EmailService {
     if (error) {
       throw new ServiceUnavailableException(
         'Unable to send the password-reset notice',
+      );
+    }
+  }
+
+  async sendSensitiveActionCode(
+    input: SendSensitiveActionInput,
+  ): Promise<void> {
+    const { error } = await this.resend.emails.send(
+      {
+        from: this.from,
+        to: input.to,
+        subject: 'Confirm your Aurescore security change',
+        text: `Your Aurescore security verification code is ${input.code}. It expires in 5 minutes.`,
+        html: [
+          '<p>Your Aurescore security verification code is:</p>',
+          `<p style="font-size: 32px; font-weight: 700; letter-spacing: 8px">${input.code}</p>`,
+          '<p>This code expires in 5 minutes. If you did not request a security change, review your sessions immediately.</p>',
+        ].join(''),
+      },
+      { idempotencyKey: input.idempotencyKey },
+    );
+    if (error) {
+      throw new ServiceUnavailableException(
+        'Unable to send the security verification email',
       );
     }
   }

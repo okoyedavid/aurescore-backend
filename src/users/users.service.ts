@@ -13,6 +13,9 @@ import { PrismaService } from '../database/prisma.service';
 import { EmailChangeVerificationService } from '../email-change-verification/email-change-verification.service';
 import { EmailService } from '../email/email.service';
 import type { RequestLocationContext } from '../location/location.service';
+import { SensitiveActionRateLimitService } from '../rate-limit/sensitive-action-rate-limit.service';
+import type { SensitiveAction } from '../sensitive-action/dto/request-sensitive-verification.dto';
+import { SensitiveActionVerificationService } from '../sensitive-action/sensitive-action-verification.service';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { ConfirmEmailChangeDto } from './dto/confirm-email-change.dto';
 import { RequestEmailChangeDto } from './dto/request-email-change.dto';
@@ -47,13 +50,72 @@ export class UsersService {
     private readonly audit: AuditService,
     private readonly emailChanges: EmailChangeVerificationService,
     private readonly email: EmailService,
+    private readonly sensitiveRateLimits: SensitiveActionRateLimitService,
+    private readonly sensitiveVerification: SensitiveActionVerificationService,
   ) {}
 
   async getCurrentUser(userId: string) {
-    return this.prisma.user.findUniqueOrThrow({
+    const user = await this.prisma.user.findUniqueOrThrow({
       where: { id: userId },
-      select: PUBLIC_USER_SELECT,
+      select: {
+        ...PUBLIC_USER_SELECT,
+        passwordHash: true,
+        authProviders: { select: { provider: true, linkedAt: true } },
+      },
     });
+    const { passwordHash, ...safeUser } = user;
+    return { ...safeUser, hasPassword: Boolean(passwordHash) };
+  }
+
+  listOAuthGrants(userId: string) {
+    return this.prisma.oAuthGrant.findMany({
+      where: { userId, revokedAt: null, client: { isActive: true } },
+      orderBy: { lastUsedAt: 'desc' },
+      select: {
+        grantId: true,
+        scopes: true,
+        grantedAt: true,
+        lastUsedAt: true,
+        client: {
+          select: {
+            clientId: true,
+            name: true,
+            description: true,
+            homepageUrl: true,
+            logoUrl: true,
+          },
+        },
+      },
+    });
+  }
+
+  async revokeOAuthGrant(
+    userId: string,
+    grantId: string,
+    context: RequestLocationContext,
+  ) {
+    const now = new Date();
+    const revoked = await this.prisma.$transaction(async (transaction) => {
+      const result = await transaction.oAuthGrant.updateMany({
+        where: { grantId, userId, revokedAt: null },
+        data: { revokedAt: now },
+      });
+      if (result.count === 1) {
+        await this.audit.record(
+          {
+            eventType: AUDIT_EVENTS.OAUTH_GRANT_REVOKED,
+            category: 'security',
+            outcome: 'success',
+            userId,
+            context,
+          },
+          transaction,
+        );
+      }
+      return result.count;
+    });
+    if (revoked !== 1) throw new BadRequestException('OAuth grant not found');
+    return { message: 'Application access revoked successfully' };
   }
 
   async updateProfile(
@@ -103,6 +165,7 @@ export class UsersService {
 
   async updatePreferences(
     userId: string,
+    userSessionId: string,
     input: UpdatePreferencesDto,
     context: RequestLocationContext,
   ) {
@@ -125,16 +188,15 @@ export class UsersService {
       input.twoFactorEnabled !==
         (existing.preferences?.twoFactorEnabled ?? false);
     if (changingTwoFactor) {
-      if (
-        !input.currentPassword ||
-        !existing.passwordHash ||
-        !(await this.verifyPassword(
-          existing.passwordHash,
-          input.currentPassword,
-        ))
-      ) {
-        throw new UnauthorizedException('Current password is incorrect');
-      }
+      await this.authorizeSensitiveAction(
+        userId,
+        userSessionId,
+        existing.passwordHash,
+        input.currentPassword,
+        input.reauthToken,
+        'change-two-factor',
+        context,
+      );
     }
 
     return this.prisma.$transaction(async (transaction) => {
@@ -186,13 +248,19 @@ export class UsersService {
       where: { id: userId },
       select: { passwordHash: true },
     });
+    await this.authorizeSensitiveAction(
+      userId,
+      currentUserSessionId,
+      user.passwordHash,
+      input.currentPassword,
+      input.reauthToken,
+      'set-password',
+      context,
+    );
     if (
-      !user.passwordHash ||
-      !(await this.verifyPassword(user.passwordHash, input.currentPassword))
+      user.passwordHash &&
+      (await this.verifyPassword(user.passwordHash, input.newPassword))
     ) {
-      throw new UnauthorizedException('Current password is incorrect');
-    }
-    if (await this.verifyPassword(user.passwordHash, input.newPassword)) {
       throw new BadRequestException(
         'The new password must be different from the current password',
       );
@@ -248,6 +316,7 @@ export class UsersService {
 
   async requestEmailChange(
     userId: string,
+    userSessionId: string,
     input: RequestEmailChangeDto,
     context: RequestLocationContext,
   ) {
@@ -255,12 +324,15 @@ export class UsersService {
       where: { id: userId },
       select: { email: true, passwordHash: true },
     });
-    if (
-      !user.passwordHash ||
-      !(await this.verifyPassword(user.passwordHash, input.currentPassword))
-    ) {
-      throw new UnauthorizedException('Current password is incorrect');
-    }
+    await this.authorizeSensitiveAction(
+      userId,
+      userSessionId,
+      user.passwordHash,
+      input.currentPassword,
+      input.reauthToken,
+      'change-email',
+      context,
+    );
     if (user.email === input.newEmail) {
       throw new BadRequestException('The new email must be different');
     }
@@ -387,6 +459,41 @@ export class UsersService {
     } catch {
       return false;
     }
+  }
+
+  private async authorizeSensitiveAction(
+    userId: string,
+    userSessionId: string,
+    passwordHash: string | null,
+    currentPassword: string | undefined,
+    reauthToken: string | undefined,
+    action: SensitiveAction,
+    context: RequestLocationContext,
+  ): Promise<void> {
+    if (!passwordHash) {
+      await this.sensitiveVerification.consumeAuthorization(
+        reauthToken,
+        userId,
+        userSessionId,
+        action,
+      );
+      return;
+    }
+
+    await this.sensitiveRateLimits.consume(
+      userId,
+      userSessionId,
+      context.requestMetadata.ipAddress ??
+        context.requestMetadata.requestId ??
+        'unavailable',
+    );
+    if (
+      !currentPassword ||
+      !(await this.verifyPassword(passwordHash, currentPassword))
+    ) {
+      throw new UnauthorizedException('Current password is incorrect');
+    }
+    await this.sensitiveRateLimits.reset(userId, userSessionId);
   }
 
   private isUniqueConstraintError(

@@ -1,25 +1,43 @@
 import { RequestMethod, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import cookieParser from 'cookie-parser';
+import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { requestContextMiddleware } from './common/middleware/request-context.middleware';
+import { csrfOriginMiddleware } from './common/middleware/csrf-origin.middleware';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
   const configService = app.get(ConfigService);
   const isProduction = configService.get<string>('NODE_ENV') === 'production';
   const frontendOrigin = configService.get<string>(
     'FRONTEND_URL',
     isProduction ? 'https://aurescore.okoyedavid.com' : 'http://localhost:3000',
   );
+  const port = configService.get<number>('PORT', 3001);
+  const issuer = configService.get<string>(
+    'OIDC_ISSUER',
+    `http://localhost:${port}`,
+  );
+  app.set(
+    'trust proxy',
+    parseTrustProxy(configService.get<string>('TRUST_PROXY')),
+  );
 
   app.enableCors({
     origin: frontendOrigin,
     credentials: true,
   });
+  app.use(helmet());
   app.use(cookieParser());
   app.use(requestContextMiddleware);
+  app.use(
+    csrfOriginMiddleware(
+      new Set([new URL(frontendOrigin).origin, new URL(issuer).origin]),
+    ),
+  );
   app.enableShutdownHooks();
   app.setGlobalPrefix('api', {
     exclude: [
@@ -33,6 +51,20 @@ async function bootstrap() {
       transform: true,
     }),
   );
-  await app.listen(configService.get<number>('PORT', 3001));
+  await app.listen(port);
 }
 void bootstrap();
+
+function parseTrustProxy(value: string | undefined): boolean | number | string {
+  if (!value) return false;
+  if (/^\d+$/.test(value)) {
+    const hops = Number(value);
+    if (!Number.isSafeInteger(hops) || hops < 1) {
+      throw new Error(
+        'TRUST_PROXY must be a positive hop count or proxy subnet',
+      );
+    }
+    return hops;
+  }
+  return value;
+}

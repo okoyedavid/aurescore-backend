@@ -31,7 +31,7 @@ describe('AuthCookieService', () => {
       httpOnly: true,
       secure: false,
       sameSite: 'lax',
-      path: '/api/auth/refresh',
+      path: '/api/auth',
       expires: refreshTokenExpiresAt,
     });
   });
@@ -60,7 +60,7 @@ describe('AuthCookieService', () => {
       httpOnly: true,
       secure: false,
       sameSite: 'lax',
-      path: '/api/auth/refresh',
+      path: '/api/auth',
     });
   });
 

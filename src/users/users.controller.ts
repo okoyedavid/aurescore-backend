@@ -1,11 +1,13 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Header,
   HttpCode,
   HttpStatus,
   Patch,
+  Param,
   Post,
   Req,
   UseGuards,
@@ -19,6 +21,7 @@ import { RequestEmailChangeDto } from './dto/request-email-change.dto';
 import { UpdatePreferencesDto } from './dto/update-preferences.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UsersService } from './users.service';
+import { OAuthGrantParamDto } from './dto/oauth-grant-param.dto';
 
 @Controller('account')
 @UseGuards(AccessTokenGuard)
@@ -32,6 +35,24 @@ export class UsersController {
   @Header('Cache-Control', 'no-store')
   getCurrentUser(@Req() request: AuthenticatedRequest) {
     return this.users.getCurrentUser(request.auth.userId);
+  }
+
+  @Get('oauth-grants')
+  @Header('Cache-Control', 'no-store')
+  listOAuthGrants(@Req() request: AuthenticatedRequest) {
+    return this.users.listOAuthGrants(request.auth.userId);
+  }
+
+  @Delete('oauth-grants/:grantId')
+  revokeOAuthGrant(
+    @Req() request: AuthenticatedRequest,
+    @Param() params: OAuthGrantParamDto,
+  ) {
+    return this.users.revokeOAuthGrant(
+      request.auth.userId,
+      params.grantId,
+      this.locations.getRequestContext(request),
+    );
   }
 
   @Patch('profile')
@@ -53,6 +74,7 @@ export class UsersController {
   ) {
     return this.users.updatePreferences(
       request.auth.userId,
+      request.auth.userSessionId,
       input,
       this.locations.getRequestContext(request),
     );
@@ -79,6 +101,7 @@ export class UsersController {
   ) {
     return this.users.requestEmailChange(
       request.auth.userId,
+      request.auth.userSessionId,
       input,
       this.locations.getRequestContext(request),
     );

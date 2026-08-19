@@ -170,6 +170,24 @@ export class SessionService {
       | 'google_email_code' = 'password',
   ): Promise<CreatedLoginSession> {
     return this.prisma.$transaction(async (transaction) => {
+      const sessionsOverLimit = await transaction.userSession.findMany({
+        where: { userId, revokedAt: null },
+        orderBy: { createdAt: 'desc' },
+        skip: 9,
+        select: { userSessionId: true },
+      });
+      if (sessionsOverLimit.length > 0) {
+        const ids = sessionsOverLimit.map((session) => session.userSessionId);
+        const now = new Date();
+        await transaction.authSession.updateMany({
+          where: { userSessionId: { in: ids }, revokedAt: null },
+          data: { revokedAt: now },
+        });
+        await transaction.userSession.updateMany({
+          where: { userSessionId: { in: ids }, revokedAt: null },
+          data: { revokedAt: now },
+        });
+      }
       const userSession = await transaction.userSession.create({
         data: {
           userId,
@@ -223,6 +241,53 @@ export class SessionService {
         tokens,
       };
     });
+  }
+
+  async logout(
+    refreshToken: string | null,
+    context: RequestLocationContext,
+  ): Promise<void> {
+    if (!refreshToken) return;
+    try {
+      const claims = await this.authTokens.verifyRefreshToken(refreshToken);
+      const now = new Date();
+      await this.prisma.$transaction(async (transaction) => {
+        const session = await transaction.userSession.findFirst({
+          where: {
+            userSessionId: claims.userSessionId,
+            userId: claims.userId,
+          },
+          select: { userSessionId: true },
+        });
+        if (!session) return;
+        await transaction.authSession.updateMany({
+          where: { userSessionId: claims.userSessionId, revokedAt: null },
+          data: { revokedAt: now },
+        });
+        await transaction.userSession.updateMany({
+          where: {
+            userSessionId: claims.userSessionId,
+            userId: claims.userId,
+            revokedAt: null,
+          },
+          data: { revokedAt: now },
+        });
+        await this.audit.record(
+          {
+            eventType: AUDIT_EVENTS.SESSION_REVOKED,
+            category: 'session',
+            outcome: 'success',
+            userId: claims.userId,
+            userSessionId: claims.userSessionId,
+            context,
+            reason: 'logout',
+          },
+          transaction,
+        );
+      });
+    } catch {
+      // Logout remains idempotent and cookie clearing must always continue.
+    }
   }
 
   async refreshSession(

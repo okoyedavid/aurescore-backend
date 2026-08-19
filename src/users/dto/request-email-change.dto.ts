@@ -1,5 +1,5 @@
 import { Transform, TransformFnParams } from 'class-transformer';
-import { IsEmail, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsEmail, IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class RequestEmailChangeDto {
   @Transform(({ value }: TransformFnParams) => {
@@ -10,8 +10,13 @@ export class RequestEmailChangeDto {
   @MaxLength(254)
   newEmail!: string;
 
+  @IsOptional()
   @IsString()
-  @MinLength(1)
   @MaxLength(128)
-  currentPassword!: string;
+  currentPassword?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  reauthToken?: string;
 }

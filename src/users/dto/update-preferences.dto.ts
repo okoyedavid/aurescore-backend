@@ -19,4 +19,9 @@ export class UpdatePreferencesDto {
   @IsString()
   @MaxLength(128)
   currentPassword?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  reauthToken?: string;
 }

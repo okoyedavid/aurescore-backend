@@ -9,7 +9,12 @@ export class AuthCookieService {
   private readonly secure: boolean;
 
   constructor(configService: ConfigService) {
-    this.secure = configService.get<string>('NODE_ENV') === 'production';
+    const production = configService.get<string>('NODE_ENV') === 'production';
+    const configured = configService.get<string>('COOKIE_SECURE');
+    if (production && configured !== 'true') {
+      throw new Error('COOKIE_SECURE must be true in production');
+    }
+    this.secure = configured === 'true';
   }
 
   setAuthCookies(response: Response, tokens: AuthTokenPair): void {
@@ -26,13 +31,17 @@ export class AuthCookieService {
     });
     response.cookie('refreshToken', tokens.refreshToken, {
       ...sharedOptions,
-      path: '/api/auth/refresh',
+      path: '/api/auth',
       expires: tokens.refreshTokenExpiresAt,
     });
   }
 
   getRefreshToken(request: Request): string | null {
     return this.getCookie(request, 'refreshToken');
+  }
+
+  getAccessToken(request: Request): string | null {
+    return this.getCookie(request, 'accessToken');
   }
 
   setGoogleOAuthStateCookie(
@@ -87,7 +96,7 @@ export class AuthCookieService {
     });
     response.clearCookie('refreshToken', {
       ...sharedOptions,
-      path: '/api/auth/refresh',
+      path: '/api/auth',
     });
   }
 }

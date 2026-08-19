@@ -12,6 +12,8 @@ import { AuditModule } from './audit/audit.module';
 import { OAuthClientModule } from './oauth-client/oauth-client.module';
 import { OAuthProviderModule } from './oauth-provider/oauth-provider.module';
 import { PasswordResetModule } from './password-reset/password-reset.module';
+import { SensitiveActionModule } from './sensitive-action/sensitive-action.module';
+import { validateEnvironment } from './config/environment';
 
 @Module({
   imports: [
@@ -25,8 +27,11 @@ import { PasswordResetModule } from './password-reset/password-reset.module';
     OAuthClientModule,
     OAuthProviderModule,
     PasswordResetModule,
+    SensitiveActionModule,
     ConfigModule.forRoot({
       isGlobal: true,
+      cache: true,
+      validate: validateEnvironment,
     }),
   ],
   controllers: [AppController],

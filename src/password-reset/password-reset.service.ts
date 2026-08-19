@@ -8,6 +8,7 @@ import type { RequestLocationContext } from '../location/location.service';
 import type { ConfirmPasswordResetDto } from './dto/confirm-password-reset.dto';
 import type { RequestPasswordResetDto } from './dto/request-password-reset.dto';
 import { PasswordResetVerificationService } from './password-reset-verification.service';
+import { enforceMinimumResponseTime } from '../common/utils/minimum-response-time';
 
 @Injectable()
 export class PasswordResetService {
@@ -24,6 +25,7 @@ export class PasswordResetService {
     input: RequestPasswordResetDto,
     context: RequestLocationContext,
   ) {
+    const startedAt = Date.now();
     const email = input.email.trim().toLowerCase();
     const user = await this.prisma.user.findUnique({
       where: { email },
@@ -73,6 +75,7 @@ export class PasswordResetService {
       }
     }
 
+    await enforceMinimumResponseTime(startedAt);
     return {
       message:
         'If an eligible account exists, a password-reset code has been sent.',

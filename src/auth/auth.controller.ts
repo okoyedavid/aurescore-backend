@@ -8,6 +8,7 @@ import {
   Query,
   Req,
   Res,
+  UseGuards,
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { AuthCookieService } from '../auth-cookie/auth-cookie.service';
@@ -22,6 +23,8 @@ import { VerifyLoginDto } from './dto/verify-login.dto';
 import { ResendLoginVerificationDto } from './dto/resend-login-verification.dto';
 import { GoogleOAuthCallbackDto } from './dto/google-oauth-callback.dto';
 import { GoogleAccountLinkRequiredError } from '../google-auth/google-auth.exceptions';
+import { AccessTokenGuard } from '../auth-guard/access-token.guard';
+import type { AuthenticatedRequest } from '../auth-guard/authenticated-request';
 
 @Controller('auth')
 export class AuthController {
@@ -54,9 +57,29 @@ export class AuthController {
     @Res() response: Response,
   ): Promise<void> {
     const expectedState = this.authCookies.getGoogleOAuthState(request);
+    const isLinkCallback = await this.authService.isGoogleLinkCallback(
+      query.state,
+    );
     this.authCookies.clearGoogleOAuthStateCookie(response);
 
     try {
+      if (isLinkCallback) {
+        await this.authService.linkGoogleAccount(
+          {
+            code: query.code,
+            state: query.state,
+            error: query.error,
+            expectedState,
+            accessToken: this.authCookies.getAccessToken(request),
+          },
+          this.locations.getRequestContext(request),
+        );
+        response.redirect(
+          HttpStatus.FOUND,
+          this.authService.googleLinkCallbackRedirect('success'),
+        );
+        return;
+      }
       const result = await this.authService.loginWithGoogle(
         {
           code: query.code,
@@ -84,6 +107,13 @@ export class AuthController {
         this.authService.googleCallbackRedirect('success'),
       );
     } catch (error: unknown) {
+      if (isLinkCallback) {
+        response.redirect(
+          HttpStatus.FOUND,
+          this.authService.googleLinkCallbackRedirect('failed'),
+        );
+        return;
+      }
       response.redirect(
         HttpStatus.FOUND,
         this.authService.googleCallbackRedirect(
@@ -93,6 +123,26 @@ export class AuthController {
         ),
       );
     }
+  }
+
+  @Post('google/link')
+  @UseGuards(AccessTokenGuard)
+  @HttpCode(HttpStatus.OK)
+  async beginGoogleLink(
+    @Req() request: AuthenticatedRequest,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const authorization = await this.authService.beginGoogleLink(
+      request.auth.userId,
+      request.auth.userSessionId,
+      this.locations.getRequestContext(request),
+    );
+    this.authCookies.setGoogleOAuthStateCookie(
+      response,
+      authorization.state,
+      authorization.expiresAt,
+    );
+    return { url: authorization.url };
   }
 
   @Post('login')
@@ -175,6 +225,23 @@ export class AuthController {
 
       throw error;
     }
+  }
+
+  @Post('logout')
+  @HttpCode(HttpStatus.OK)
+  async logout(
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    try {
+      await this.authService.logout(
+        this.authCookies.getRefreshToken(request),
+        this.locations.getRequestContext(request),
+      );
+    } finally {
+      this.authCookies.clearAuthCookies(response);
+    }
+    return { message: 'Logged out successfully' };
   }
 
   @Post('register')

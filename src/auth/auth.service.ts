@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   UnauthorizedException,
@@ -34,6 +35,8 @@ import {
   type GoogleIdentity,
 } from '../google-auth/google-auth.service';
 import type { PendingAuthenticationMethod } from '../login-verification/login-verification.service';
+import { AuthTokenService } from '../auth-token/auth-token.service';
+import { enforceMinimumResponseTime } from '../common/utils/minimum-response-time';
 
 const DUMMY_PASSWORD_HASH =
   '$argon2id$v=19$m=19456,p=1,t=2$vnqdgSXrPWJ2LQoM/KocTQ$yAo23u2KFYc+81T86cNGCfzE9LX+ylVX2F5mR09jYEQ';
@@ -49,12 +52,144 @@ export class AuthService {
     private readonly loginVerifications: LoginVerificationService,
     private readonly audit: AuditService,
     private readonly googleAuth: GoogleAuthService,
+    private readonly authTokens: AuthTokenService,
   ) {}
 
   beginGoogleLogin(context: RequestLocationContext) {
     return this.googleAuth.createAuthorizationRequest(
       this.sourceIdentifier(context),
     );
+  }
+
+  beginGoogleLink(
+    userId: string,
+    userSessionId: string,
+    context: RequestLocationContext,
+  ) {
+    return this.googleAuth.createLinkAuthorizationRequest(
+      this.sourceIdentifier(context),
+      userId,
+      userSessionId,
+    );
+  }
+
+  isGoogleLinkCallback(state: string | undefined): Promise<boolean> {
+    return this.googleAuth.isLinkAuthorization(state);
+  }
+
+  googleLinkCallbackRedirect(status: 'success' | 'failed'): string {
+    return this.googleAuth.frontendLinkCallbackUrl(status);
+  }
+
+  async linkGoogleAccount(
+    input: {
+      code?: string;
+      state?: string;
+      error?: string;
+      expectedState: string | null;
+      accessToken: string | null;
+    },
+    context: RequestLocationContext,
+  ): Promise<void> {
+    let userId: string | undefined;
+    try {
+      if (!input.accessToken)
+        throw new GoogleOAuthFlowError('authentication_required');
+      const claims = await this.authTokens.verifyAccessToken(input.accessToken);
+      userId = claims.userId;
+      const { identity, intent } =
+        await this.googleAuth.exchangeLinkAuthorizationCode(
+          input.code,
+          input.state,
+          input.expectedState,
+          input.error,
+        );
+      if (
+        intent.userId !== claims.userId ||
+        intent.userSessionId !== claims.userSessionId
+      )
+        throw new GoogleOAuthFlowError('link_session_mismatch');
+
+      const session = await this.prisma.userSession.findUnique({
+        where: { userSessionId: claims.userSessionId },
+        select: {
+          userId: true,
+          currentAuthSessionId: true,
+          revokedAt: true,
+          user: { select: { status: true, emailVerifiedAt: true } },
+        },
+      });
+      if (
+        !session ||
+        session.userId !== claims.userId ||
+        session.revokedAt ||
+        !session.currentAuthSessionId ||
+        session.user.status !== 'active' ||
+        !session.user.emailVerifiedAt
+      )
+        throw new GoogleOAuthFlowError('authentication_required');
+
+      await this.prisma.$transaction(async (transaction) => {
+        const ownedIdentity = await transaction.authProvider.findUnique({
+          where: {
+            provider_providerUserId: {
+              provider: 'GOOGLE',
+              providerUserId: identity.providerUserId,
+            },
+          },
+          select: { userId: true },
+        });
+        if (ownedIdentity && ownedIdentity.userId !== claims.userId) {
+          throw new ConflictException('This Google account is already linked');
+        }
+        const currentGoogle = await transaction.authProvider.findUnique({
+          where: {
+            userId_provider: { userId: claims.userId, provider: 'GOOGLE' },
+          },
+          select: { authProviderId: true, providerUserId: true },
+        });
+        if (
+          currentGoogle &&
+          currentGoogle.providerUserId !== identity.providerUserId
+        )
+          throw new ConflictException(
+            'A different Google account is already linked',
+          );
+        if (!currentGoogle) {
+          await transaction.authProvider.create({
+            data: {
+              userId: claims.userId,
+              provider: 'GOOGLE',
+              providerUserId: identity.providerUserId,
+              providerEmail: identity.email,
+            },
+          });
+        }
+        await this.audit.record(
+          {
+            eventType: AUDIT_EVENTS.GOOGLE_ACCOUNT_LINKED,
+            category: 'security',
+            outcome: 'success',
+            userId: claims.userId,
+            userSessionId: claims.userSessionId,
+            context,
+          },
+          transaction,
+        );
+      });
+    } catch (error: unknown) {
+      await this.audit.recordBestEffort({
+        eventType: AUDIT_EVENTS.GOOGLE_ACCOUNT_LINK_FAILED,
+        category: 'security',
+        outcome: 'blocked',
+        severity: 'warning',
+        userId,
+        context,
+        reason:
+          error instanceof GoogleOAuthFlowError ? error.reason : 'link_failed',
+      });
+      throw error;
+    }
   }
 
   googleCallbackRedirect(
@@ -398,7 +533,12 @@ export class AuthService {
     }
   }
 
+  logout(refreshToken: string | null, context: RequestLocationContext) {
+    return this.sessions.logout(refreshToken, context);
+  }
+
   async registerUser(input: RegisterDto, context: RequestLocationContext) {
+    const startedAt = Date.now();
     const email = this.normalizeEmail(input.email);
     let user = await this.prisma.user.findUnique({
       where: { email },
@@ -466,6 +606,7 @@ export class AuthService {
       await this.issueAndSendEmailCode(user.id, user.email, context);
     }
 
+    await enforceMinimumResponseTime(startedAt);
     return {
       message:
         'If this email can be registered, a verification code has been sent.',

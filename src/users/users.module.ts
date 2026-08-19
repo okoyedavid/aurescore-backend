@@ -5,6 +5,8 @@ import { LocationModule } from '../location/location.module';
 import { EmailModule } from '../email/email.module';
 import { EmailChangeVerificationModule } from '../email-change-verification/email-change-verification.module';
 import { AuthGuardModule } from '../auth-guard/auth-guard.module';
+import { RateLimitModule } from '../rate-limit/rate-limit.module';
+import { SensitiveActionModule } from '../sensitive-action/sensitive-action.module';
 
 @Module({
   imports: [
@@ -12,6 +14,8 @@ import { AuthGuardModule } from '../auth-guard/auth-guard.module';
     EmailModule,
     EmailChangeVerificationModule,
     AuthGuardModule,
+    RateLimitModule,
+    SensitiveActionModule,
   ],
   controllers: [UsersController],
   providers: [UsersService],

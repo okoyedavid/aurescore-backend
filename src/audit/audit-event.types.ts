@@ -15,6 +15,10 @@ export const AUDIT_EVENTS = {
   LOGIN_VERIFICATION_CODE_SENT: 'authentication.login_verification.code_sent',
   LOGIN_VERIFICATION_FAILED: 'authentication.login_verification.failed',
   LOGIN_VERIFICATION_REQUIRED: 'authentication.login_verification.required',
+  SENSITIVE_VERIFICATION_CODE_SENT:
+    'authentication.sensitive_verification.code_sent',
+  GOOGLE_ACCOUNT_LINKED: 'account.auth_provider.google_linked',
+  GOOGLE_ACCOUNT_LINK_FAILED: 'account.auth_provider.google_link_failed',
   PASSWORD_RESET_CODE_SENT: 'authentication.password_reset.code_sent',
   PASSWORD_RESET_COMPLETED: 'authentication.password_reset.completed',
   PASSWORD_RESET_FAILED: 'authentication.password_reset.failed',
@@ -30,6 +34,7 @@ export const AUDIT_EVENTS = {
   OAUTH_AUTHORIZATION_DENIED: 'oauth.authorization.denied',
   OAUTH_TOKEN_ISSUED: 'oauth.token.issued',
   OAUTH_TOKEN_REJECTED: 'oauth.token.rejected',
+  OAUTH_GRANT_REVOKED: 'oauth.grant.revoked',
 } as const;
 
 export type AuditEventType = (typeof AUDIT_EVENTS)[keyof typeof AUDIT_EVENTS];

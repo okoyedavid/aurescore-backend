@@ -9,6 +9,7 @@ import { LoginVerificationService } from '../login-verification/login-verificati
 import { AuditService } from '../audit/audit.service';
 import { GoogleAuthService } from '../google-auth/google-auth.service';
 import { GoogleAccountLinkRequiredError } from '../google-auth/google-auth.exceptions';
+import { AuthTokenService } from '../auth-token/auth-token.service';
 
 describe('AuthService', () => {
   let service: AuthService;
@@ -20,7 +21,9 @@ describe('AuthService', () => {
     authProvider: {
       findUnique: jest.fn(),
       update: jest.fn(),
+      create: jest.fn(),
     },
+    userSession: { findUnique: jest.fn() },
   };
   const sessions = {
     createLoginSession: jest.fn(),
@@ -48,7 +51,9 @@ describe('AuthService', () => {
     createAuthorizationRequest: jest.fn(),
     exchangeAuthorizationCode: jest.fn(),
     frontendCallbackUrl: jest.fn(),
+    exchangeLinkAuthorizationCode: jest.fn(),
   };
+  const authTokens = { verifyAccessToken: jest.fn() };
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -62,6 +67,7 @@ describe('AuthService', () => {
         { provide: LoginVerificationService, useValue: loginVerifications },
         { provide: AuditService, useValue: audit },
         { provide: GoogleAuthService, useValue: googleAuth },
+        { provide: AuthTokenService, useValue: authTokens },
       ],
     }).compile();
 
@@ -338,5 +344,67 @@ describe('AuthService', () => {
       'old-refresh',
       context,
     );
+  });
+
+  it('links Google only after a fresh flow bound to the same session', async () => {
+    const context = {
+      requestMetadata: {
+        requestId: 'request-id',
+        ipAddress: '8.8.8.8',
+        userAgent: 'test',
+        method: 'GET',
+        path: '/api/auth/google/callback',
+      },
+      location: { city: null, region: null, country: null },
+    };
+    authTokens.verifyAccessToken.mockResolvedValue({
+      userId: 'user-id',
+      userSessionId: 'session-id',
+      tokenId: 'token-id',
+    });
+    googleAuth.exchangeLinkAuthorizationCode.mockResolvedValue({
+      intent: { userId: 'user-id', userSessionId: 'session-id' },
+      identity: {
+        providerUserId: 'google-subject',
+        email: 'different-google-email@example.com',
+        name: 'User',
+        avatar: null,
+      },
+    });
+    prisma.userSession.findUnique.mockResolvedValue({
+      userId: 'user-id',
+      currentAuthSessionId: 'auth-session-id',
+      revokedAt: null,
+      user: { status: 'active', emailVerifiedAt: new Date() },
+    });
+    prisma.authProvider.findUnique
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null);
+    prisma.authProvider.create.mockResolvedValue({});
+    prisma.$transaction.mockImplementation(
+      (operation: (transaction: typeof prisma) => unknown) => operation(prisma),
+    );
+
+    await service.linkGoogleAccount(
+      {
+        code: 'code',
+        state: 'state',
+        expectedState: 'state',
+        accessToken: 'access-token',
+      },
+      context,
+    );
+
+    expect(prisma.authProvider.create.mock.calls).toHaveLength(1);
+    const createCalls = prisma.authProvider.create.mock
+      .calls as unknown as Array<[{ data: Record<string, unknown> }]>;
+    expect(createCalls[0][0]).toEqual({
+      data: {
+        userId: 'user-id',
+        provider: 'GOOGLE',
+        providerUserId: 'google-subject',
+        providerEmail: 'different-google-email@example.com',
+      },
+    });
   });
 });

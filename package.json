@@ -6,6 +6,7 @@
   "private": true,
   "license": "UNLICENSED",
   "scripts": {
+    "prebuild": "prisma generate",
     "build": "nest build",
     "maxmind:download": "bash ./scripts/download-maxmind-db.sh",
     "oidc:generate-key": "node ./scripts/generate-oidc-key.mjs",
@@ -35,6 +36,7 @@
     "class-validator": "^0.15.1",
     "cookie-parser": "^1.4.7",
     "google-auth-library": "^11.0.2",
+    "helmet": "^8.1.0",
     "maxmind": "^5.0.7",
     "redis": "^6.2.1",
     "reflect-metadata": "^0.2.2",
@@ -68,6 +70,9 @@
     "tsconfig-paths": "^4.2.0",
     "typescript": "^5.7.3",
     "typescript-eslint": "^8.20.0"
+  },
+  "overrides": {
+    "deepmerge-ts": "8.0.1"
   },
   "jest": {
     "moduleFileExtensions": [

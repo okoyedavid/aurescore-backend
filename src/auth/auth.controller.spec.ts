@@ -7,6 +7,9 @@ import {
   RefreshAlreadyRotatedException,
   RefreshRejectedException,
 } from '../session/session.exceptions';
+import { AccessTokenGuard } from '../auth-guard/access-token.guard';
+import { AuthTokenService } from '../auth-token/auth-token.service';
+import { PrismaService } from '../database/prisma.service';
 
 describe('AuthController', () => {
   let controller: AuthController;
@@ -21,6 +24,11 @@ describe('AuthController', () => {
     beginGoogleLogin: jest.fn(),
     loginWithGoogle: jest.fn(),
     googleCallbackRedirect: jest.fn(),
+    isGoogleLinkCallback: jest.fn().mockResolvedValue(false),
+    googleLinkCallbackRedirect: jest.fn(),
+    beginGoogleLink: jest.fn(),
+    linkGoogleAccount: jest.fn(),
+    logout: jest.fn(),
   };
   const authCookies = {
     setAuthCookies: jest.fn(),
@@ -29,6 +37,7 @@ describe('AuthController', () => {
     setGoogleOAuthStateCookie: jest.fn(),
     getGoogleOAuthState: jest.fn(),
     clearGoogleOAuthStateCookie: jest.fn(),
+    getAccessToken: jest.fn(),
   };
   const locations = {
     getRequestContext: jest.fn(),
@@ -44,8 +53,13 @@ describe('AuthController', () => {
         },
         { provide: AuthCookieService, useValue: authCookies },
         { provide: LocationService, useValue: locations },
+        { provide: AuthTokenService, useValue: {} },
+        { provide: PrismaService, useValue: {} },
       ],
-    }).compile();
+    })
+      .overrideGuard(AccessTokenGuard)
+      .useValue({ canActivate: jest.fn(() => true) })
+      .compile();
 
     controller = module.get<AuthController>(AuthController);
     jest.clearAllMocks();
@@ -264,5 +278,18 @@ describe('AuthController', () => {
     ).rejects.toBeInstanceOf(RefreshAlreadyRotatedException);
     expect(authCookies.clearAuthCookies).not.toHaveBeenCalled();
     expect(authCookies.setAuthCookies).not.toHaveBeenCalled();
+  });
+
+  it('always clears cookies during idempotent logout', async () => {
+    const request = {};
+    const response = {};
+    authCookies.getRefreshToken.mockReturnValue(null);
+    authService.logout.mockResolvedValue(undefined);
+    locations.getRequestContext.mockReturnValue({});
+
+    await expect(
+      controller.logout(request as never, response as never),
+    ).resolves.toEqual({ message: 'Logged out successfully' });
+    expect(authCookies.clearAuthCookies).toHaveBeenCalledWith(response);
   });
 });

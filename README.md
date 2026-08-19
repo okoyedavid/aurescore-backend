@@ -21,7 +21,7 @@ The frontend defaults to `http://localhost:3000`. This API currently runs locall
 
 ## Authentication model
 
-Aurescore issues access and refresh JWTs only through HTTP-only cookies. Access cookies cover `/api`; refresh cookies are restricted to `/api/auth/refresh`. CORS allows only the configured frontend origin with credentials.
+Aurescore issues access and refresh JWTs only through HTTP-only cookies. Access cookies cover `/api`; refresh cookies are restricted to `/api/auth`, which allows both refresh and logout while keeping them away from unrelated API routes. CORS allows only the configured frontend origin with credentials.
 
 Each device login creates a long-lived `UserSession`. Its `currentAuthSessionId` points to the one refresh-token record currently allowed to rotate. Refresh rotation atomically claims that record, creates its replacement, and conditionally moves the pointer. A duplicate arriving within one minute receives the already-rotated response; a later replay or inconsistent relational state revokes the entire session chain.
 
@@ -50,6 +50,7 @@ Registration does not create login cookies. The verified user signs in separatel
 - Google returns to `GET /api/auth/google/callback`; this exact callback must be registered in Google Cloud.
 - OAuth state is bound through a short-lived HTTP-only cookie.
 - A new verified Google identity can create an account. An existing password account with the same email is not silently linked.
+- An authenticated user can start a fresh, session-bound link flow with `POST /api/auth/google/link`; the Google identity is linked only to that authenticated account and is rejected if another user owns it.
 - If Aurescore email 2FA is enabled, Google authentication must still complete the login-verification challenge before cookies are issued.
 
 Detailed integration: [Google authentication](docs/google-authentication.md) and [frontend Google prompt](docs/frontend-google-auth-prompt.md).
@@ -57,7 +58,7 @@ Detailed integration: [Google authentication](docs/google-authentication.md) and
 ## Forgot password
 
 1. `POST /api/auth/password-reset/request` accepts `{ "email": "user@example.com" }`.
-2. It always returns HTTP 202, a generic message, and an opaque `challengeId`, including for unknown or ineligible accounts.
+2. An accepted request returns HTTP 202, a generic message, and an opaque `challengeId`, including for unknown or ineligible accounts. Rate-limited requests return HTTP 429.
 3. Eligible accounts receive a five-minute code by email. A replacement request after cooldown invalidates the previous active challenge.
 4. `POST /api/auth/password-reset/confirm` accepts `challengeId`, six-digit `code`, and `newPassword`.
 5. Successful confirmation changes the password in the same transaction that revokes every `UserSession` and `AuthSession`, writes the audit event, clears caller cookies, and sends a security notice.
@@ -67,6 +68,7 @@ Password reset never logs the user in. All devices must authenticate again. See 
 ## Refresh and session management
 
 - `POST /api/auth/refresh` rotates the refresh credential and replaces both cookies.
+- `POST /api/auth/logout` idempotently revokes the identifiable current session and always clears both cookies, including when the access cookie has expired.
 - `GET /api/sessions` lists the authenticated user's devices and marks the current one.
 - `DELETE /api/sessions/:sessionId` revokes one owned session and clears cookies when it is the caller.
 - `DELETE /api/sessions/others` revokes every session except the caller.
@@ -82,6 +84,10 @@ The access-token guard verifies JWT claims, the user/session relationship, the c
 - `POST /api/account/email-change/request` verifies the current password and sends a code to the new address.
 - `POST /api/account/email-change/confirm` applies the verified address and revokes other sessions.
 - `GET /api/audit-events` returns cursor-paginated security/account history belonging only to the caller.
+
+`GET /api/account/me` also reports `hasPassword` and linked provider summaries. Password-backed accounts confirm high-risk changes with their current password. Provider-only accounts request and verify a one-use email security challenge through `/api/account/security-verification`; the resulting five-minute token is bound to one session and one action (`set-password`, `change-email`, or `change-two-factor`). Sensitive password checks are rate-limited per user, session and IP.
+
+Users can inspect and revoke third-party access with `GET /api/account/oauth-grants` and `DELETE /api/account/oauth-grants/:grantId`.
 
 Audit metadata rejects sensitive field names and stores a keyed email hash instead of plaintext email.
 
@@ -125,6 +131,7 @@ The provider then loads its Redis interaction and either renders consent or retu
 - Resend sends registration, login-2FA, password-reset, and email-change messages.
 - MaxMind GeoLite2 enriches security events and sessions from public IP addresses.
 - Request-context middleware assigns request IDs and captures normalized request metadata.
+- Helmet provides global security headers, unsafe browser requests are checked against trusted origins for CSRF defense, and production startup requires explicit secure-cookie and trusted-proxy configuration.
 - Audit events cover registration, login, verification, refresh replay, password changes/resets, email changes, session revocation, and OAuth client/consent/token activity.
 
 ## Validation and tests
@@ -143,6 +150,7 @@ The security-focused unit tests cover cookie configuration, request metadata, ac
 ## Production checklist
 
 - Use independent high-entropy JWT, verification, audit, and rate-limit secrets.
+- Set `COOKIE_SECURE=true` and configure `TRUST_PROXY` to the exact deployed hop count or proxy CIDRs; production startup fails when these are missing.
 - Configure a persistent `OIDC_PRIVATE_KEY_BASE64` and `OIDC_KEY_ID`; never use the development ephemeral key.
 - Run `prisma migrate deploy` during deployment and `prisma generate` during build.
 - Run Redis with authentication, TLS/private networking, persistence appropriate to the deployment, and eviction settings that do not unexpectedly discard security state.

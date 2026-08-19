@@ -12,6 +12,11 @@ interface StoredGoogleAuthorization {
   nonce: string;
 }
 
+interface StoredGoogleLinkIntent {
+  userId: string;
+  userSessionId: string;
+}
+
 export interface GoogleIdentity {
   providerUserId: string;
   email: string;
@@ -106,6 +111,56 @@ export class GoogleAuthService {
     };
   }
 
+  async createLinkAuthorizationRequest(
+    sourceIdentifier: string,
+    userId: string,
+    userSessionId: string,
+  ): Promise<GoogleAuthorizationRequest> {
+    const authorization =
+      await this.createAuthorizationRequest(sourceIdentifier);
+    const stored = await this.redis.client.set(
+      this.linkIntentKey(authorization.state),
+      JSON.stringify({
+        userId,
+        userSessionId,
+      } satisfies StoredGoogleLinkIntent),
+      { EX: GoogleAuthService.STATE_TTL_SECONDS, NX: true },
+    );
+    if (stored !== 'OK') {
+      await this.redis.client.del(this.stateKey(authorization.state));
+      throw new GoogleOAuthFlowError('state_storage_failed');
+    }
+    return authorization;
+  }
+
+  async isLinkAuthorization(state: string | undefined): Promise<boolean> {
+    if (!state) return false;
+    return Boolean(await this.redis.client.get(this.linkIntentKey(state)));
+  }
+
+  async exchangeLinkAuthorizationCode(
+    code: string | undefined,
+    state: string | undefined,
+    expectedState: string | null,
+    providerError?: string,
+  ): Promise<{ identity: GoogleIdentity; intent: StoredGoogleLinkIntent }> {
+    if (!state || !expectedState || state !== expectedState) {
+      throw new GoogleOAuthFlowError('invalid_state');
+    }
+    const storedIntent = await this.redis.client.getDel(
+      this.linkIntentKey(state),
+    );
+    if (!storedIntent) throw new GoogleOAuthFlowError('expired_link_intent');
+    const intent = this.parseLinkIntent(storedIntent);
+    const identity = await this.exchangeAuthorizationCode(
+      code,
+      state,
+      expectedState,
+      providerError,
+    );
+    return { identity, intent };
+  }
+
   async exchangeAuthorizationCode(
     code: string | undefined,
     state: string | undefined,
@@ -186,6 +241,27 @@ export class GoogleAuthService {
     return url.toString();
   }
 
+  frontendLinkCallbackUrl(status: 'success' | 'failed'): string {
+    const url = new URL('/settings/security', this.frontendUrl);
+    url.searchParams.set('googleLink', status);
+    return url.toString();
+  }
+
+  private parseLinkIntent(value: string): StoredGoogleLinkIntent {
+    try {
+      const parsed = JSON.parse(value) as Partial<StoredGoogleLinkIntent>;
+      if (
+        typeof parsed.userId === 'string' &&
+        typeof parsed.userSessionId === 'string'
+      ) {
+        return parsed as StoredGoogleLinkIntent;
+      }
+    } catch {
+      // A generic flow error is returned below.
+    }
+    throw new GoogleOAuthFlowError('link_intent_corrupted');
+  }
+
   private parseStoredAuthorization(value: string): StoredGoogleAuthorization {
     try {
       const parsed: unknown = JSON.parse(value);
@@ -206,6 +282,11 @@ export class GoogleAuthService {
   private stateKey(state: string): string {
     const digest = createHash('sha256').update(state).digest('hex');
     return `oauth:google:state:${digest}`;
+  }
+
+  private linkIntentKey(state: string): string {
+    const digest = createHash('sha256').update(state).digest('hex');
+    return `oauth:google:link-intent:${digest}`;
   }
 
   private async enforceStartLimit(sourceIdentifier: string): Promise<void> {
