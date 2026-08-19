@@ -1,0 +1,54 @@
+model OAuthClient {
+  clientId String @id
+
+  ownerUserId String
+  owner       User   @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+
+  name        String
+  slug        String  @unique
+  description String?
+  homepageUrl String?
+  logoUrl     String?
+
+  clientSecretHash String
+  clientSecretHint String
+  secretCreatedAt  DateTime @default(now()) @db.Timestamptz(3)
+
+  redirectUris  String[]
+  allowedScopes String[]
+
+  clientType OAuthClientType @default(CONFIDENTIAL_WEB)
+  isActive   Boolean         @default(true)
+  firstParty Boolean         @default(false)
+
+  grants OAuthGrant[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([ownerUserId])
+}
+
+model OAuthGrant {
+  grantId String @id @default(cuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  clientId String
+  client   OAuthClient @relation(fields: [clientId], references: [clientId], onDelete: Cascade)
+
+  subject String   @unique
+  scopes  String[]
+
+  grantedAt  DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
+  lastUsedAt DateTime? @db.Timestamptz(3)
+  revokedAt  DateTime? @db.Timestamptz(3)
+
+  @@unique([userId, clientId])
+}
+
+enum OAuthClientType {
+  CONFIDENTIAL_WEB
+}

@@ -1,0 +1,37 @@
+model ApplicationError {
+  errorId String @id @default(cuid())
+
+  requestId String
+
+  name       String
+  message    String
+  code       String?
+  stack      String?
+  statusCode Int
+
+  method String
+  path   String
+
+  userId String?
+
+  userSessionId String?
+  authSessionId String?
+
+  ipAddress  String?
+  userAgent  String?
+  deviceName String?
+
+  environment String
+  release     String?
+
+  resolvedAt DateTime? @db.Timestamptz(3)
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+
+  @@index([requestId])
+  @@index([userId])
+  @@index([userSessionId])
+  @@index([ipAddress])
+  @@index([environment, createdAt(sort: Desc)])
+  @@index([statusCode, createdAt(sort: Desc)])
+  @@index([path, createdAt(sort: Desc)])
+}
