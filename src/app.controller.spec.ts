@@ -15,8 +15,14 @@ describe('AppController', () => {
   });
 
   describe('root', () => {
-    it('should return "Hello World!"', () => {
-      expect(appController.getHello()).toBe('Hello World!');
+    it('should report that the backend is running', () => {
+      expect(appController.getStatus()).toBe('Backend is running');
+    });
+  });
+
+  describe('health', () => {
+    it('should return an ok status', () => {
+      expect(appController.getHealth()).toEqual({ status: 'ok' });
     });
   });
 });

@@ -41,6 +41,8 @@ async function bootstrap() {
   app.enableShutdownHooks();
   app.setGlobalPrefix('api', {
     exclude: [
+      { path: '', method: RequestMethod.GET },
+      { path: 'health', method: RequestMethod.GET },
       { path: '.well-known/openid-configuration', method: RequestMethod.GET },
     ],
   });
